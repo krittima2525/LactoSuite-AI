@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LactoSuite AI - Professional Hub v4.7.1</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;700;800&display=swap');
+        body { font-family: 'Sarabun', sans-serif; }
+        .card-glow { box-shadow: 0 0 30px rgba(99, 102, 241, 0.15); }
+        .metric-card { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .metric-card:hover { transform: translateY(-5px); box-shadow: 0 15px 30px -10px rgba(0, 0, 0, 0.1); }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
+        .log-enter { animation: slideIn 0.3s ease-out; }
+        @keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+    </style>
+</head>
+<body class="bg-[#f8fafc]">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const Icon = ({ name, className }) => {
+            const containerRef = useRef(null);
+            useEffect(() => {
+                if (window.lucide && containerRef.current) {
+                    containerRef.current.innerHTML = '';
+                    const iconElement = document.createElement('i');
+                    iconElement.setAttribute('data-lucide', name);
+                    if (className) iconElement.className = className;
+                    containerRef.current.appendChild(iconElement);
+                    window.lucide.createIcons();
+                }
+            }, [name, className]);
+            return <span ref={containerRef}></span>;
+        };
+
+        const App = () => {
+            const [prediction, setPrediction] = useState(null);
+            const [derived, setDerived] = useState(null);
+            const [loading, setLoading] = useState(false);
+            const [serverStatus, setServerStatus] = useState('checking');
+            const [history, setHistory] = useState([]); 
+            const [expandedId, setExpandedId] = useState(null);
+            
+            const [perfData, setPerfData] = useState({ 
+                r2: '84.66%', 
+                mae: '12.51 g/L', 
+                rmse: '18.06 g/L', 
+                mape: '49.74%', 
+                model: 'Stacking_Ensemble' 
+            });
+
+            const options = {
+                strains: ['B. coagulans', 'E. hirae', 'L. casei', 'L. delbrueckii', 'L. delbrueckii NCIM', 'L. fermentum', 'L. plantarum', 'Lc. lactis IO-1', 'Rhizopus oryzae 106', 'S. inulinus'],
+                carbonSources: ['Glucose (Syn)', 'Molasses', 'Sorghum Juice', 'Lactose', 'Starch', 'Sucrose'],
+                nitrogenSources: ['CSL+YE+Pep', 'CSL + YE', 'CSL + Peptone', 'Complex', 'Yeast Extract', 'Peptone']
+            };
+
+            const [formData, setFormData] = useState({
+                strain: 'Lc. lactis IO-1',
+                carbonSource: 'Glucose (Syn)',
+                nitrogenSource: 'CSL+YE+Pep',
+                cConc: 60, nConc: 25,
+                mode: 'Batch', aeration: 'Anaerobic', doGas: 0,
+                temp: 37, pH: 6.0, rpm: 200, time: 36
+            });
+
+            const checkHealth = async () => {
+                try {
+                    const res = await fetch('http://localhost:5001/health');
+                    const data = await res.json();
+                    if (res.ok) {
+                        setServerStatus('online');
+                        if (data.performance) {
+                            setPerfData({
+                                r2: data.performance.r2_accuracy,
+                                mae: data.performance.mae_value,
+                                rmse: data.performance.rmse_value,
+                                mape: data.performance.mape_value,
+                                model: data.performance.model_name
+                            });
+                        }
+                    } else setServerStatus('offline');
+                } catch { setServerStatus('offline'); }
+            };
+
+            useEffect(() => {
+                checkHealth();
+                const interval = setInterval(checkHealth, 5000);
+                return () => clearInterval(interval);
+            }, []);
+
+            const executePrediction = async () => {
+                setLoading(true);
+                try {
+                    const response = await fetch('http://localhost:5001/predict', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(formData)
+                    });
+                    const data = await response.json();
+                    if (data.status === 'success') {
+                        // บันทึกผลลัพธ์เป็นตัวเลข (Float)
+                        const yieldVal = parseFloat(data.yield);
+                        setPrediction(yieldVal);
+                        setDerived(data.derived);
+                        
+                        const newLog = {
+                            id: Date.now(),
+                            yield: yieldVal.toFixed(2),
+                            timestamp: new Date().toLocaleString('th-TH'),
+                            params: { ...formData },
+                            derived: data.derived
+                        };
+                        setHistory(prev => [newLog, ...prev]);
+                        setExpandedId(newLog.id); 
+                    }
+                } catch { alert("Connection Error: ไม่สามารถเชื่อมต่อ API Server ได้"); }
+                finally { setLoading(false); }
+            };
+
+            const downloadLogs = () => {
+                if (history.length === 0) return;
+                const headers = ["Timestamp", "Yield (g/L)", "Strain", "C-Source", "C-Conc", "N-Source", "N-Conc", "Mode", "Aeration", "DO", "RPM", "Temp", "pH", "Time"];
+                const rows = history.map(h => [
+                    h.timestamp, h.yield, h.params.strain, h.params.carbonSource, h.params.cConc,
+                    h.params.nitrogenSource, h.params.nConc, h.params.mode, h.params.aeration,
+                    h.params.doGas, h.params.rpm, h.params.temp, h.params.pH, h.params.time
+                ]);
+                let csvContent = "\uFEFF" + headers.join(",") + "\n" + rows.map(e => e.join(",")).join("\n");
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement("a");
+                const url = URL.createObjectURL(blob);
+                link.setAttribute("href", url);
+                link.setAttribute("download", `LactoSuite_Full_Logs_${new Date().toISOString().slice(0,10)}.csv`);
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            return (
+                <div className="min-h-screen bg-[#f8fafc] pb-20 Sarabun text-slate-800">
+                    <div className="bg-slate-900 text-white p-6 flex justify-between items-center shadow-xl border-b border-white/5 sticky top-0 z-50">
+                        <div className="flex items-center gap-4">
+                            <Icon name="brain-circuit" className="text-indigo-400 w-9 h-9" />
+                            <div>
+                                <h1 className="font-black text-2xl tracking-tighter uppercase leading-none">LACTOSUITE <span className="text-indigo-400">RESEARCH</span></h1>
+                                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em] mt-1">Professional Laboratory Hub v4.7.1</p>
+                            </div>
+                        </div>
+                        <div className={`px-4 py-2 rounded-xl flex items-center gap-3 border ${serverStatus === 'online' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400'}`}>
+                            <div className={`w-2 h-2 rounded-full ${serverStatus === 'online' ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`}></div>
+                            <span className="text-[11px] font-black uppercase tracking-widest">{serverStatus === 'online' ? 'Engine Active' : 'Offline'}</span>
+                        </div>
+                    </div>
+
+                    <div className="max-w-7xl mx-auto mt-8 px-6">
+                        {/* Metrics Bar */}
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-5 mb-10">
+                            <div className="bg-white p-6 rounded-[2.5rem] border border-slate-200 shadow-sm metric-card flex flex-col justify-center">
+                                <div className="flex items-center gap-4 mb-2">
+                                    <Icon name="target" className="text-indigo-600 w-5 h-5" />
+                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">R-Squared</p>
+                                </div>
+                                <p className="text-3xl font-black text-slate-800 leading-none">{perfData.r2}</p>
+                            </div>
+                            <div className="bg-white p-6 rounded-[2.5rem] border border-slate-200 shadow-sm metric-card flex flex-col justify-center">
+                                <div className="flex items-center gap-4 mb-2">
+                                    <Icon name="activity" className="text-rose-600 w-5 h-5" />
+                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">MAE</p>
+                                </div>
+                                <p className="text-3xl font-black text-slate-800 leading-none">{perfData.mae}</p>
+                            </div>
+                            <div className="bg-white p-6 rounded-[2.5rem] border border-slate-200 shadow-sm metric-card flex flex-col justify-center">
+                                <div className="flex items-center gap-4 mb-2">
+                                    <Icon name="trending-up" className="text-amber-600 w-5 h-5" />
+                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">RMSE</p>
+                                </div>
+                                <p className="text-3xl font-black text-slate-800 leading-none">{perfData.rmse}</p>
+                            </div>
+                            <div className="bg-slate-900 p-6 rounded-[2.5rem] shadow-2xl metric-card text-white flex flex-col justify-center">
+                                <div className="flex items-center gap-4 mb-2">
+                                    <Icon name="bar-chart-3" className="text-indigo-400 w-5 h-5" />
+                                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">MAPE</p>
+                                </div>
+                                <p className="text-3xl font-black text-indigo-400 leading-none">{perfData.mape}</p>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                            <div className="lg:col-span-7">
+                                <div className="bg-white rounded-[3rem] p-10 shadow-sm border border-slate-200 card-glow h-full">
+                                    <div className="flex items-center justify-between mb-12 border-b pb-6">
+                                        <div className="flex items-center gap-3">
+                                            <Icon name="sliders-horizontal" className="text-indigo-600 w-6 h-6" />
+                                            <h3 className="font-black text-slate-800 text-sm uppercase tracking-widest">Lab Parameter Hub</h3>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+                                        <div className="space-y-8">
+                                            <h4 className="text-[12px] font-black text-indigo-600 uppercase border-l-4 border-indigo-600 pl-4 tracking-tighter">1. Microbiological Strategy</h4>
+                                            <div className="space-y-6">
+                                                <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100 text-indigo-700">
+                                                    <label className="text-[10px] font-black text-slate-400 uppercase mb-3 block tracking-widest">Microbial Strain</label>
+                                                    <select value={formData.strain} onChange={e => setFormData({...formData, strain: e.target.value})} className="w-full bg-white border border-slate-200 rounded-2xl p-4 font-black text-sm outline-none focus:ring-4 focus:ring-indigo-500/10 shadow-sm">
+                                                        {options.strains.map(s => <option key={s}>{s}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-4">
+                                                    <div>
+                                                        <label className="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">C-Conc</label>
+                                                        <input type="number" value={formData.cConc} onChange={e => setFormData({...formData, cConc: parseFloat(e.target.value)})} className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 font-black text-2xl outline-none focus:bg-white transition-all text-indigo-700" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">N-Conc</label>
+                                                        <input type="number" value={formData.nConc} onChange={e => setFormData({...formData, nConc: parseFloat(e.target.value)})} className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 font-black text-2xl outline-none focus:bg-white transition-all text-indigo-700" />
+                                                    </div>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-4">
+                                                    <select value={formData.carbonSource} onChange={e => setFormData({...formData, carbonSource: e.target.value})} className="w-full bg-white border border-slate-200 rounded-xl p-3 font-bold text-[11px] uppercase outline-none shadow-sm">{options.carbonSources.map(c => <option key={c}>{c}</option>)}</select>
+                                                    <select value={formData.nitrogenSource} onChange={e => setFormData({...formData, nitrogenSource: e.target.value})} className="w-full bg-white border border-slate-200 rounded-xl p-3 font-bold text-[11px] uppercase outline-none shadow-sm">{options.nitrogenSources.map(n => <option key={n}>{n}</option>)}</select>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-8">
+                                            <h4 className="text-[12px] font-black text-indigo-600 uppercase border-l-4 border-indigo-600 pl-4 tracking-tighter">2. Environmental Kinetics</h4>
+                                            <div className="grid grid-cols-2 gap-5">
+                                                <div className="col-span-2 grid grid-cols-2 gap-4">
+                                                    <div className="bg-indigo-50/30 p-4 rounded-2xl border border-indigo-100/50">
+                                                        <label className="text-[9px] font-black text-indigo-400 mb-1 block uppercase">Ferment Mode</label>
+                                                        <select value={formData.mode} onChange={e => setFormData({...formData, mode: e.target.value})} className="w-full bg-transparent font-black text-xs text-indigo-800 outline-none"><option>Batch</option><option>Fed-Batch</option><option>Continuous</option></select>
+                                                    </div>
+                                                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                                                        <label className="text-[9px] font-black text-slate-400 mb-1 block uppercase">Aeration</label>
+                                                        <select value={formData.aeration} onChange={e => setFormData({...formData, aeration: e.target.value})} className="w-full bg-transparent font-black text-xs outline-none"><option>Anaerobic</option><option>Aerobic</option><option>Micro-aerobic</option></select>
+                                                    </div>
+                                                </div>
+                                                <div><label className="text-[10px] font-black text-slate-400 mb-2 block uppercase tracking-tighter">DO (%)</label><input type="number" value={formData.doGas} onChange={e => setFormData({...formData, doGas: parseFloat(e.target.value)})} className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 font-black text-xl outline-none shadow-sm" /></div>
+                                                <div><label className="text-[10px] font-black text-slate-400 mb-2 block uppercase tracking-tighter">RPM</label><input type="number" value={formData.rpm} onChange={e => setFormData({...formData, rpm: parseFloat(e.target.value)})} className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 font-black text-xl outline-none shadow-sm" /></div>
+                                                <div><label className="text-[10px] font-black text-slate-400 mb-2 block uppercase tracking-tighter">Temp (°C)</label><input type="number" value={formData.temp} step="0.1" onChange={e => setFormData({...formData, temp: parseFloat(e.target.value)})} className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 font-black text-xl outline-none shadow-sm" /></div>
+                                                <div><label className="text-[10px] font-black text-slate-400 mb-2 block uppercase tracking-tighter">pH</label><input type="number" value={formData.pH} step="0.1" onChange={e => setFormData({...formData, pH: parseFloat(e.target.value)})} className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 font-black text-xl outline-none shadow-sm" /></div>
+                                            </div>
+                                            <div><label className="text-[10px] font-black text-slate-400 mb-2 block uppercase tracking-widest">Incubation Time (h)</label><input type="number" value={formData.time} onChange={e => setFormData({...formData, time: parseFloat(e.target.value)})} className="w-full bg-slate-900 text-white rounded-2xl p-4 font-black text-2xl outline-none shadow-xl text-center" /></div>
+                                        </div>
+                                    </div>
+
+                                    <button onClick={executePrediction} disabled={loading || serverStatus === 'offline'} className="w-full mt-12 py-7 bg-indigo-600 text-white rounded-[2.5rem] font-black text-2xl tracking-[0.3em] shadow-2xl hover:bg-indigo-700 active:scale-95 transition-all flex items-center justify-center gap-6 group disabled:opacity-50">
+                                        {loading ? <div className="w-10 h-10 border-6 border-white border-t-transparent animate-spin rounded-full"></div> : <Icon name="zap" className="w-8 h-8 fill-current" />}
+                                        {loading ? 'ANALYZING PIPELINE...' : 'RUN PREDICTION'}
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="lg:col-span-5 flex flex-col gap-8">
+                                <div className="bg-indigo-700 rounded-[4rem] p-10 text-white shadow-2xl card-glow relative overflow-hidden flex flex-col justify-center min-h-[420px] border-4 border-white/10">
+                                    <div className="absolute top-0 right-0 p-12 opacity-5"><Icon name="flask-conical" className="w-80 h-80" /></div>
+                                    <div className="relative z-10 text-center">
+                                        <p className="text-[12px] font-black uppercase tracking-[0.5em] text-indigo-300 mb-8 opacity-70 italic leading-none">Estimation Outcome</p>
+                                        {prediction !== null ? (
+                                            <div className="animate-in zoom-in duration-500">
+                                                <div className="flex items-baseline justify-center gap-4 mb-10">
+                                                    <span className="text-7xl font-black tracking-tighter leading-none">{prediction.toFixed(2)}</span>
+                                                    <span className="text-2xl font-black opacity-40 uppercase tracking-widest leading-none">g/L</span>
+                                                </div>
+                                                <div className="space-y-4 border-t border-white/20 pt-8 text-left">
+                                                    <div className="flex justify-between items-center bg-white/10 p-4 rounded-2xl border border-white/5 shadow-inner">
+                                                        <span className="text-[11px] font-black uppercase opacity-60 tracking-widest">C/N Ratio Calculation</span>
+                                                        <span className="text-lg font-black text-emerald-300">
+                                                            {derived?.cn_ratio ? derived.cn_ratio.toFixed(2) : (formData.cConc / (formData.nConc || 1)).toFixed(2)}
+                                                        </span>
+                                                    </div>
+                                                    <div className="bg-emerald-500/20 p-4 rounded-2xl flex items-center gap-4 border border-emerald-500/30">
+                                                        <div className="bg-emerald-400 p-1.5 rounded-full"><Icon name="check" className="w-3 h-3 text-indigo-900" /></div>
+                                                        <p className="text-[12px] font-black text-emerald-200 leading-tight uppercase">Calibrated logic sync complete</p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="flex flex-col items-center py-20">
+                                                <div className="w-32 h-32 bg-white/10 rounded-full flex items-center justify-center mb-8 border border-white/10 shadow-2xl">
+                                                    <Icon name="radar" className="w-14 h-14 animate-pulse text-indigo-200" />
+                                                </div>
+                                                <p className="text-[12px] font-black uppercase tracking-[0.4em] text-indigo-200 max-w-[200px] leading-loose">Awaiting Lab Parameters</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="bg-white rounded-[3rem] p-8 shadow-sm border border-slate-200 flex flex-col h-[650px]">
+                                    <div className="flex items-center justify-between mb-8 border-b pb-4">
+                                        <div className="flex items-center gap-3">
+                                            <Icon name="history" className="text-indigo-600 w-5 h-5" />
+                                            <h4 className="font-black text-slate-800 text-[11px] uppercase tracking-[0.2em]">Simulation History</h4>
+                                        </div>
+                                        <button 
+                                            onClick={downloadLogs}
+                                            disabled={history.length === 0}
+                                            className="bg-slate-900 text-white text-[9px] font-black px-4 py-2 rounded-xl flex items-center gap-2 hover:bg-indigo-600 transition-all disabled:opacity-30 uppercase tracking-widest"
+                                        >
+                                            <Icon name="download" className="w-3 h-3" /> Export Logs
+                                        </button>
+                                    </div>
+                                    
+                                    <div className="flex-grow space-y-4 overflow-y-auto custom-scrollbar pr-2">
+                                        {history.length > 0 ? (
+                                            history.map((log) => (
+                                                <div key={log.id} className={`bg-slate-50 border border-slate-100 rounded-[2rem] transition-all overflow-hidden log-enter ${expandedId === log.id ? 'ring-2 ring-indigo-500/20 border-indigo-200 shadow-lg' : 'hover:border-indigo-100'}`}>
+                                                    <div onClick={() => setExpandedId(expandedId === log.id ? null : log.id)} className="p-5 flex justify-between items-center cursor-pointer select-none">
+                                                        <div className="space-y-1">
+                                                            <div className="flex items-center gap-3">
+                                                                <span className="text-[9px] font-black text-slate-400 bg-white px-1.5 py-0.5 rounded border border-slate-100">{log.timestamp.split(' ')[1]}</span>
+                                                                <p className="text-[12px] font-black text-slate-700 truncate max-w-[150px] uppercase tracking-tight">{log.params.strain}</p>
+                                                            </div>
+                                                            <p className="text-[10px] text-slate-400 font-bold">Yield: <span className="text-indigo-600 font-black">{log.yield} g/L</span></p>
+                                                        </div>
+                                                        <Icon name={expandedId === log.id ? "chevron-up" : "chevron-down"} className="text-slate-300 w-4 h-4" />
+                                                    </div>
+
+                                                    {expandedId === log.id && (
+                                                        <div className="px-6 pb-6 pt-2 border-t border-slate-100 bg-white/50 animate-in slide-in-from-top-2 duration-300">
+                                                            <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+                                                                <div className="space-y-2 border-r border-slate-100 pr-4">
+                                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Medium Detail</p>
+                                                                    <div className="text-[10px] flex justify-between"><span>Carbon:</span><span className="font-bold">{log.params.carbonSource} ({log.params.cConc}g)</span></div>
+                                                                    <div className="text-[10px] flex justify-between"><span>Nitrogen:</span><span className="font-bold">{log.params.nitrogenSource} ({log.params.nConc}g)</span></div>
+                                                                    <div className="text-[10px] flex justify-between"><span>C/N Ratio:</span><span className="font-bold">{(log.params.cConc/log.params.nConc).toFixed(2)}</span></div>
+                                                                </div>
+                                                                <div className="space-y-2">
+                                                                    <p className="text-[9px] font-black text-rose-400 uppercase tracking-widest">Process Kinetics</p>
+                                                                    <div className="text-[10px] flex justify-between"><span>Temp/pH:</span><span className="font-bold">{log.params.temp}°C / {log.params.pH}</span></div>
+                                                                    <div className="text-[10px] flex justify-between"><span>RPM / DO:</span><span className="font-bold">{log.params.rpm} / {log.params.doGas}%</span></div>
+                                                                    <div className="text-[10px] flex justify-between"><span>Aeration:</span><span className="font-bold text-slate-600">{log.params.aeration}</span></div>
+                                                                    <div className="text-[10px] flex justify-between border-t border-slate-50 pt-1 mt-1"><span>Mode:</span><span className="font-black uppercase text-indigo-600">{log.params.mode} ({log.params.time}h)</span></div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))
+                                        ) : (
+                                            <div className="h-full flex flex-col items-center justify-center opacity-30 text-center py-20">
+                                                <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4"><Icon name="database-backup" className="w-8 h-8" /></div>
+                                                <p className="text-[11px] font-black uppercase tracking-widest leading-loose">No active session logs<br/>Run prediction to record</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <footer className="max-w-7xl mx-auto px-6 mt-20 pb-20 border-t border-slate-200 pt-12 text-center">
+                        <p className="text-[12px] font-black text-slate-400 uppercase tracking-[0.5em] leading-loose">LactoSuite Intelligence Architecture © 2026 | Professional Hub v4.7.1<br/><span className="text-[9px] opacity-60">Session-based Memory with Enhanced Data Formatting</span></p>
+                    </footer>
+                </div>
+            );
+        };
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
